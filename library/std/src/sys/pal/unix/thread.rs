@@ -49,7 +49,13 @@ impl Thread {
     pub unsafe fn new(stack: usize, p: Box<dyn FnOnce()>) -> io::Result<Thread> {
         let p = Box::into_raw(Box::new(p));
         let mut native: libc::pthread_t = mem::zeroed();
+        #[cfg(target_os = "espidf")]
+        let mut attr: libc::pthread_attr_t = mem::zeroed();
+        #[cfg(target_os = "espidf")]
+        assert_eq!(libc::pthread_attr_init(&mut attr), 0);
+        #[cfg(not(target_os = "espidf"))]
         let mut attr: mem::MaybeUninit<libc::pthread_attr_t> = mem::MaybeUninit::uninit();
+        #[cfg(not(target_os = "espidf"))]
         assert_eq!(libc::pthread_attr_init(attr.as_mut_ptr()), 0);
 
         #[cfg(target_os = "espidf")]
@@ -57,10 +63,7 @@ impl Thread {
             // Only set the stack if a non-zero value is passed
             // 0 is used as an indication that the default stack size configured in the ESP-IDF menuconfig system should be used
             assert_eq!(
-                libc::pthread_attr_setstacksize(
-                    attr.as_mut_ptr(),
-                    cmp::max(stack, min_stack_size(&attr))
-                ),
+                libc::pthread_attr_setstacksize(&mut attr, cmp::max(stack, min_stack_size(&attr))),
                 0
             );
         }
@@ -85,11 +88,17 @@ impl Thread {
             };
         }
 
+        #[cfg(not(target_os = "espidf"))]
         let ret = libc::pthread_create(&mut native, attr.as_ptr(), thread_start, p as *mut _);
+        #[cfg(target_os = "espidf")]
+        let ret = libc::pthread_create(&mut native, &attr, thread_start, p as *mut _);
         // Note: if the thread creation fails and this assert fails, then p will
         // be leaked. However, an alternative design could cause double-free
         // which is clearly worse.
+        #[cfg(not(target_os = "espidf"))]
         assert_eq!(libc::pthread_attr_destroy(attr.as_mut_ptr()), 0);
+        #[cfg(target_os = "espidf")]
+        assert_eq!(libc::pthread_attr_destroy(&mut attr), 0);
 
         return if ret != 0 {
             // The thread failed to start and as a result p was not consumed. Therefore, it is
